@@ -11,9 +11,6 @@ from smarts.env.hiway_env import HiWayEnv
 from smarts.core.agent_interface import NeighborhoodVehicles, RGB,Waypoints
 from smarts.core.controllers import ActionSpaceType
 
-from obs_adapter import NeighbourObsAdapter
-
-
 n_experiments = 3
 def reward_adapter(env_obs, env_reward):
     return env_reward
@@ -49,39 +46,9 @@ use_map = False
 hist_fut = False
 agg = False
 
-if use_neighbor:
-    lstm_fut = False
-    use_attn = False
-    query_step = 10
-    neighbor_interface = AgentInterface(
-                max_episode_steps=None,
-                action=ActionSpaceType.Lane,
-                waypoints=Waypoints(20))
-    neighbor_spec = AgentSpec(
-            interface=neighbor_interface,
-            agent_builder=None,
-            observation_adapter=observation_adapter,
-            reward_adapter=reward_adapter,
-            action_adapter=action_adapter,
-            info_adapter=info_adapter,
-        )
-    if use_map:
-        lstm_fut = False
-        adapter = NeighbourObsAdapter(mode='map', N_steps=10, dim=4, neighbors=5,add_future_state=False,
-        query_step=query_step,lstm_fut=False)
-    elif hist_fut:
-        lstm_fut = False
-        adapter = NeighbourObsAdapter(mode='hist_fut', N_steps=10, dim=4, neighbors=5,add_future_state=True,
-        query_step=query_step,lstm_fut=False)
-    else:
-        adapter = NeighbourObsAdapter(mode='mlp', N_steps=10, dim=4, neighbors=5,add_future_state=True,
-        query_step=query_step,lstm_fut=lstm_fut)
-
-    obsadapter = adapter.obs_adapter
-else:
-    neighbor_spec , obsadapter = None,None
-    lstm_fut = False
-    use_attn=False
+neighbor_spec , obsadapter = None,None
+lstm_fut = False
+use_attn=False
 
 AGENT_ID = "Agent-LHC"
 # env = gym.make(
@@ -117,7 +84,6 @@ for scenario_path in scenario_paths:
     # create env/
     env = HiWayEnv(scenarios=scenario_path, agent_specs={AGENT_ID: agent_spec}, headless=True, seed=2)
     env.agent_id = AGENT_ID
-
 
     env.action_space = gym.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
     if use_neighbor:

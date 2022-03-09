@@ -91,194 +91,6 @@ class LSTMNetwork(BaseNetwork):
         # return output[:,-1,:]
         return out
 
-class LSTM_neighborNetwork(BaseNetwork):
-    def __init__(self,num_inputs,use_attn=False,agg=False,trans_encode=False):
-        super(LSTM_neighborNetwork,self).__init__()
-        self.fut_lstm = nn.Sequential(
-            nn.LSTM(4,256,batch_first=True),
-        )
-        self.net_2 = nn.Sequential(
-            nn.Linear(256,256),
-            nn.ReLU(),
-            nn.Linear(256,256),
-            nn.ReLU()
-        )
-        self.use_attn = use_attn
-        if self.use_attn:
-            self.attn_layer = nn.MultiheadAttention(embed_dim=256, num_heads=2,batch_first=True)
-        if trans_encode:
-            self.time_attn = nn.MultiheadAttention(embed_dim=256, num_heads=2,batch_first=True)
-            self.emb = nn.Linear(4, 256,bias=False)
-        self.agg=agg
-        self.trans_encode = trans_encode
-    
-    def _timestep_attention(self,states):
-        states = self.emb(states)
-        output,_ = self.time_attn(states,states,states)
-        output = F.relu(output)
-        output,_ = torch.max(output,1)
-        return output
-    def _aggregated(self,mlp_input,l_o):
-        mlp_input = torch.unsqueeze(mlp_input, dim=1)
-        # agg_input = torch.concat([mlp_input,l_o],dim=1)
-
-        output,_ = self.attn_layer(mlp_input,l_o,l_o)
-        output = torch.squeeze(output,dim=1)
-        output = F.relu(output)
-        return output
-    
-    def forward(self,state):
-        l_o = []
-        for i in range(6):
-            if self.trans_encode:
-                lstm_output = self._timestep_attention(state[:,i,:,:])
-                l_o.append(lstm_output)
-            else:
-                lstm_output,(_,_) = self.fut_lstm(state[:,i,:,:])
-            # lstm_output,(_,_) = self.fut_lstm(state[:,i,:,:])
-                l_o.append(lstm_output[:,-1])
-        ego_hist = l_o[0]
-        l_o = torch.stack(l_o,dim=1)
-        if self.agg:
-            return l_o
-        if self.use_attn:
-            output = self._aggregated(ego_hist, l_o[:,1:,:])
-            output = ego_hist + output
-            return output
-        lstm_output = torch.sum(l_o,dim=1)
-        output = self.net_2(lstm_output)
-        return output
-        
-
-class LSTM_histNetwork(BaseNetwork):
-    def __init__(self,num_inputs,use_attn=False,hist_connect=False,agg=False,trans_encode=False):
-        super(LSTM_histNetwork,self).__init__()
-        self.fut_lstm = nn.Sequential(
-            nn.LSTM(4,256,batch_first=True),
-        )
-        self.net = nn.Sequential(
-            nn.Linear(24,256),
-            nn.ReLU()
-        )
-        self.net_2 = nn.Sequential(
-            nn.Linear(256,256),
-            nn.ReLU(),
-            nn.Linear(256,256),
-            nn.ReLU()
-        )
-        self.use_attn = use_attn
-        self.hist_connect = hist_connect
-        self.trans_encode = trans_encode
-        self.agg=agg
-        if self.use_attn:
-            self.attn_layer = nn.MultiheadAttention(embed_dim=256, num_heads=2,batch_first=True)
-        if trans_encode:
-            self.time_attn = nn.MultiheadAttention(embed_dim=256, num_heads=2,batch_first=True)
-            self.emb = nn.Linear(4, 256,bias=False)
-    
-    def _aggregated(self,mlp_input,l_o):
-        mlp_input = torch.unsqueeze(mlp_input, dim=1)
-        agg_input = torch.concat([mlp_input,l_o],dim=1)
-
-        output,_ = self.attn_layer(mlp_input,agg_input,agg_input)
-        output = torch.squeeze(output,dim=1)
-        # output = F.relu(output)
-        return output
-    
-    def _timestep_attention(self,states):
-        states = self.emb(states)
-        output,_ = self.time_attn(states,states,states)
-        output = F.relu(output)
-        output,_ = torch.max(output,1)
-        return output
-
-    def forward(self,states,ego_hist=None):
-        if self.hist_connect:
-            mlp_input = ego_hist
-            fut_inputs = states
-        else:
-            mlp_input = states[:,:24]
-            mlp_input = self.net(mlp_input)
-
-            timestep = (states.shape[1]-24)//(4*5)
-            fut_inputs = states[:,24:]
-            fut_inputs = fut_inputs.view(-1,5,timestep,4)
-        # if self.use_attn:
-        #     mlp_mask = torch.ones_like(mlp_input)
-        #     fut_mask = torch.nonzero(fut_inputs[:,:,0,0])
-        #     attn_mask = torch.unsqueeze(torch.concat([mlp_mask,fut_mask],dim=1),dim=1)
-        l_o = []
-        for i in range(5):
-            if self.trans_encode:
-                lstm_output = self._timestep_attention(fut_inputs[:,i])
-                l_o.append(lstm_output)
-            else:
-                lstm_output,(_,_) = self.fut_lstm(fut_inputs[:,i])
-                l_o.append(lstm_output[:,-1])
-        l_o = torch.stack(l_o,dim=1)
-        if self.agg:
-            return l_o
-        # print(l_o.shape)
-        # print(mlp_input.shape)
-        if self.use_attn:
-            output = self._aggregated(mlp_input, l_o)
-            # output = self.net_2(output)
-            return output
-
-        lstm_output = torch.sum(l_o,dim=1)
-        # if self.hist_connect:
-        #     return lstm_output
-        output = self.net_2(mlp_input + lstm_output)
-        return output
-
-class Hist_FutNetwork(BaseNetwork):
-    def __init__(self,num_inputs,use_attn=False,agg=False):
-        super(Hist_FutNetwork,self).__init__()
-        if agg:
-            use_attn=False
-        self.hist_net = LSTM_neighborNetwork(num_inputs,use_attn=use_attn,agg=agg,trans_encode=True)
-        self.fut_net = LSTM_histNetwork(num_inputs,use_attn=use_attn,hist_connect=True,agg=agg,trans_encode=True)
-        self.hist_len = (5+1)*10*4
-        self.agg=agg
-        if self.agg:
-            self.attn_layer = nn.MultiheadAttention(embed_dim=256, num_heads=2,batch_first=True)
-            self.attn_layer_2 = nn.MultiheadAttention(embed_dim=256, num_heads=2,batch_first=True)
-    
-    def _aggregated(self,mlp_input,l_o):
-        mlp_input = torch.unsqueeze(mlp_input, dim=1)
-        agg_input = torch.concat([mlp_input,l_o],dim=1)
-
-        output,_ = self.attn_layer(mlp_input,agg_input,agg_input)
-        output = torch.squeeze(output,dim=1)
-        output = F.relu(output)
-        return output
-    
-    def _aggregated2(self,mlp_input,l_o):
-        mlp_input = torch.unsqueeze(mlp_input, dim=1)
-        agg_input = torch.concat([mlp_input,l_o],dim=1)
-
-        output,_ = self.attn_layer_2(mlp_input,agg_input,agg_input)
-        output = torch.squeeze(output,dim=1)
-        output = F.relu(output)
-        return output
-
-    def forward(self,state):
-        hist_state,fut_state = state[:,:self.hist_len],state[:,self.hist_len:]
-        timestep = (state.shape[1]-self.hist_len)//(4*5)
-        hist_state = hist_state.view(-1,6,10,4)
-        fut_state = fut_state.view(-1,5,timestep,4)
-        hist_logits = self.hist_net(hist_state)
-        fut_logits = self.fut_net(fut_state,hist_logits)
-
-        if self.agg:
-            neighbors = hist_logits[:,1:,:]
-            ego = hist_logits[:,0,:]
-            agg = self._aggregated2(ego, neighbors)
-            fut_logits = self._aggregated(agg,fut_logits)
-
-        return fut_logits + agg
-
-
 class QNetwork(BaseNetwork):
 
     def __init__(self, num_channels, num_actions, shared=False,
@@ -294,15 +106,7 @@ class QNetwork(BaseNetwork):
             elif lstm:
                 self.conv = LSTMNetwork(num_channels)
                 out_dim = 256
-            elif umap:
-                self.conv = LSTM_neighborNetwork(num_channels,use_attn)
-                out_dim = 256
-            elif hist_fut:
-                self.conv = Hist_FutNetwork(num_channels,use_attn,agg)
-                out_dim = 256
-            elif lstm_fut:
-                self.conv = LSTM_histNetwork(num_channels,use_attn)
-                out_dim = 256
+            
             else:
                 self.conv = nn.Sequential(
                     nn.Linear(num_channels, 256),
@@ -373,15 +177,7 @@ class ValueNetwork(BaseNetwork):
                 self.conv = DQNBase(num_channels)
                 #out_dim = 6*6*64
                 out_dim = 256
-            elif lstm_fut:
-                self.conv = LSTM_histNetwork(num_channels,use_attn)
-                out_dim = 256
-            elif hist_fut:
-                self.conv = Hist_FutNetwork(num_channels,use_attn,agg)
-                out_dim = 256
-            elif umap:
-                self.conv = LSTM_neighborNetwork(num_channels,use_attn)
-                out_dim = 256
+            
             elif lstm:
                 self.conv = LSTMNetwork(num_channels)
                 out_dim = 256
@@ -455,15 +251,7 @@ class CateoricalPolicy(BaseNetwork):
             self.conv = DQNBase(num_channels)
             #out_dim = 6*6*64
             out_dim = 256
-        elif lstm_fut:
-                self.conv = LSTM_histNetwork(num_channels,use_attn)
-                out_dim = 256
-        elif umap:
-            self.conv = LSTM_neighborNetwork(num_channels,use_attn)
-            out_dim = 256
-        elif hist_fut:
-            self.conv = Hist_FutNetwork(num_channels,use_attn,agg)
-            out_dim = 256
+        
         elif lstm:
             self.conv = LSTMNetwork(num_channels)
             out_dim = 256
